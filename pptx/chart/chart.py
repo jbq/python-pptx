@@ -16,7 +16,10 @@ from .series import SeriesCollection
 from ..shared import ElementProxy, PartElementProxy
 from ..text.text import TextFrame
 from ..util import lazyproperty
-from .xmlwriter import SeriesXmlRewriterFactory
+from .xmlwriter import SeriesXmlRewriterFactory, ChartXmlWriter
+from lxml import etree
+from io import BytesIO
+from ..oxml.ns import _nsmap as namespaces
 
 
 class Chart(PartElementProxy):
@@ -195,6 +198,37 @@ class Chart(PartElementProxy):
         for this chart.
         """
         return self.part.chart_workbook
+
+    def add_subchart(self, chart_type, chart_data, new_axis_refs=None):
+        xml_bytes = ChartXmlWriter(chart_type, chart_data).xml
+        root_el = etree.parse(BytesIO(xml_bytes.encode('utf-8')))
+        val_axis = self._chartSpace.plotArea.xpath("c:valAx/c:axId/@val")
+        cat_axis = self._chartSpace.plotArea.xpath("c:catAx/c:axId/@val")
+        series_count = len(self._chartSpace.plotArea.xpath("*/c:ser"))
+
+        for el in root_el.xpath("/c:chartSpace/c:chart/c:plotArea/*", namespaces=namespaces):
+            if el.tag.endswith("Chart"):
+                # Chart element eg <c:lineChart>
+
+                if new_axis_refs is not None:
+                    # Remove all axis references
+                    existing_axis_ref = el.xpath("c:axId", namespaces=namespaces)
+                    for x in existing_axis_ref:
+                        el.remove(x)
+
+                    # Build new axis references
+                    for x in new_axis_refs:
+                        el.append(etree.Element("{%s}axId" % namespaces['c'], val=x))
+
+                # Need to increment series index to make PP happy
+                for i, x in enumerate(el.xpath("c:ser/c:idx", namespaces=namespaces)):
+                    x.set("val", str(series_count + i))
+                for i, x in enumerate(el.xpath("c:ser/c:order", namespaces=namespaces)):
+                    x.set("val", str(series_count + i))
+
+            # Need to remove unused axis to make PP happy
+            if new_axis_refs is None or new_axis_refs is not None and el.tag.endswith("Chart"):
+                self._chartSpace.plotArea.append(el)
 
 
 class ChartTitle(ElementProxy):
